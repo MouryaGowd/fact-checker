@@ -334,8 +334,11 @@ def build(out: Path, facts: dict, team: dict, results, fig_dir: Path) -> list[st
     pp.content()
     pp.acknowledgment()
     pp.references()
-    from build_report import clear_metadata, drop_unused_links
+    from build_report import clear_metadata, drop_unused_links, verify_images
     drop_unused_links(pp.doc)
     clear_metadata(pp.doc)
     pp.doc.save(str(out))
+    problems = verify_images(out)
+    if problems:
+        raise SystemExit("Broken pictures in the paper:\n  " + "\n  ".join(problems))
     return pp.missing

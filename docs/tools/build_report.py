@@ -646,22 +646,20 @@ def prune_orphan_media(path: Path) -> int:
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
         data = {n: z.read(n) for n in names}
-    used = set()
-    for n, b in data.items():
-        if n.endswith(".rels"):
-            for tgt in re.findall(rb'Target="([^"]+)"', b):
-                if tgt.startswith(b"media/") or b"/media/" in tgt:
-                    used.add("word/" + tgt.decode().split("media/")[-1].join(["media/", ""]))
-    # a media file is used if some relationship points at it and that relationship id appears in the part it belongs to
+    # A media file is kept if any relationship targets it AND the owning part's XML uses that relationship id
+    # in any r:* attribute (embed, link, pict, id). Anything else is an orphan left by deleted template content.
     referenced = set()
     for n, b in data.items():
         if not n.endswith(".rels"):
             continue
         part = n.replace("_rels/", "").removesuffix(".rels")
         part_xml = data.get(part, b"")
-        for rid, tgt in re.findall(rb'Id="([^"]+)"[^>]*Target="([^"]+)"', b) + [(r, t) for t, r in re.findall(rb'Target="([^"]+)"[^>]*Id="([^"]+)"', b)]:
-            if b"media/" in tgt and (b'"' + rid + b'"') in part_xml:
-                referenced.add("word/media/" + tgt.decode().split("media/")[-1])
+        used_ids = set(re.findall(rb'r:[A-Za-z]+="([^"]+)"', part_xml))
+        for rel in re.findall(rb"<Relationship [^>]*/>", b):
+            rid = re.search(rb'Id="([^"]+)"', rel)
+            tgt = re.search(rb'Target="([^"]+)"', rel)
+            if rid and tgt and b"media/" in tgt.group(1) and rid.group(1) in used_ids:
+                referenced.add("word/media/" + tgt.group(1).decode().split("media/")[-1])
     drop = [n for n in names if n.startswith("word/media/") and n not in referenced]
     if not drop:
         return 0
@@ -679,21 +677,63 @@ def prune_orphan_media(path: Path) -> int:
     return len(drop)
 
 
+def _used_rel_ids(root) -> set[str]:
+    """Every relationship id a part's XML refers to, whatever attribute carries it (id, embed, link, pict...)."""
+    R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    return {v for el in root.iter() for k, v in el.attrib.items() if k.startswith(R)}
+
+
 def drop_unused_links(doc: Document) -> int:
-    """Remove hyperlink and image relationships that no longer appear in the body.
+    """Remove hyperlink relationships that nothing refers to any more.
 
     Deleting template content leaves its relationships behind, so the old student e-mail links would still ship.
+    Only hyperlinks are dropped here. python-docx's own _rel_ref_count looks at r:id alone, so it reports pictures
+    (which use r:embed) as unused and deleting by it removes every image. Orphaned images are handled by
+    prune_orphan_media instead.
     """
-    HL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
-    IMG = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+    NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+    used = _used_rel_ids(doc.element)
+    for rel in doc.part.rels.values():
+        if rel.reltype in (NS + "header", NS + "footer"):
+            used |= _used_rel_ids(rel.target_part.element)
     dropped = 0
     for rId, rel in list(doc.part.rels.items()):
-        if rel.reltype not in (HL, IMG):
-            continue
-        if doc.part._rel_ref_count(rId) == 0:
+        if rel.reltype == NS + "hyperlink" and rId not in used:
             doc.part.drop_rel(rId)
             dropped += 1
     return dropped
+
+
+def verify_images(path: Path) -> list[str]:
+    """Fail loudly if any picture reference points at a missing relationship or a missing media file."""
+    import posixpath
+    import re
+    import zipfile
+
+    problems = []
+    with zipfile.ZipFile(path) as z:
+        names = set(z.namelist())
+        for part in [n for n in names if n.startswith("word/") and n.endswith(".xml") and "/_rels/" not in n]:
+            xml = z.read(part).decode("utf8", "ignore")
+            ids = set(re.findall(r'r:(?:embed|link|pict)="([^"]+)"', xml))
+            if not ids:
+                continue
+            rels_name = posixpath.join(posixpath.dirname(part), "_rels", posixpath.basename(part) + ".rels")
+            rels = z.read(rels_name).decode("utf8", "ignore") if rels_name in names else ""
+            targets = {}
+            for rel in re.findall(r"<Relationship [^>]*/>", rels):
+                rid = re.search(r'Id="([^"]+)"', rel)
+                tgt = re.search(r'Target="([^"]+)"', rel)
+                if rid and tgt:
+                    targets[rid.group(1)] = tgt.group(1)
+            for i in sorted(ids):
+                if i not in targets:
+                    problems.append(f"{part}: picture refers to {i}, which has no relationship")
+                elif not targets[i].startswith("http"):
+                    full = posixpath.normpath(posixpath.join(posixpath.dirname(part), targets[i]))
+                    if full not in names:
+                        problems.append(f"{part}: {i} -> {full} is missing from the package")
+    return problems
 
 
 def clear_metadata(doc: Document) -> None:
@@ -721,7 +761,7 @@ def build(out: Path, facts: dict, team: dict, results, fig_dir: Path, template: 
     rep.nomenclature()
     rep.list_of_figures()
     set_header_footer(rep.doc, team["short_title"])
-    print(f'  dropped {drop_unused_links(rep.doc)} unused link/image relationship(s)')
+    print(f'  dropped {drop_unused_links(rep.doc)} unused hyperlink relationship(s)')
     clear_metadata(rep.doc)
     # ask Word to refresh the TOC and page numbers when the file opens
     settings = rep.doc.settings.element
@@ -731,4 +771,8 @@ def build(out: Path, facts: dict, team: dict, results, fig_dir: Path, template: 
     rep.doc.save(str(out))
     dropped = prune_orphan_media(out)
     print(f'  removed {dropped} orphaned template image(s)')
+    problems = verify_images(out)
+    if problems:
+        raise SystemExit("Broken pictures in the report:\n  " + "\n  ".join(problems))
+    print("  verified: every picture reference resolves to a file in the package")
     return rep.missing
