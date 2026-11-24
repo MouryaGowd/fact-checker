@@ -2,6 +2,7 @@
 setlocal
 cd /d "%~dp0"
 set PYTHONUTF8=1
+set STARTED=0
 
 rem Usage:  eval.bat                 run all 50 cases
 rem         eval.bat --limit 5       quick smoke run
@@ -29,6 +30,7 @@ if not errorlevel 1 goto :ready
 
 echo Starting backend...
 start "Fact Checker Backend" /min /d "%~dp0backend" cmd /c uv run uvicorn app.main:app --port 8000
+set STARTED=1
 set /a TRIES=0
 :waitloop
 curl -s -f http://127.0.0.1:8000/api/health >nul 2>&1
@@ -50,10 +52,15 @@ uv run python -m eval.run_eval %*
 set RC=%ERRORLEVEL%
 popd
 
+rem Stop the backend only if this script started it, so port 8000 is free for run.bat.
+if "%STARTED%"=="1" (
+  for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8000 " ^| findstr LISTENING') do taskkill /f /t /pid %%P >nul 2>&1
+)
+
 echo.
 if exist "backend\eval\results\latest.md" (
   echo Report: %~dp0backend\eval\results\latest.md
-  start "" "backend\eval\results\latest.md"
+  start "" notepad "backend\eval\results\latest.md"
 ) else (
   echo No report was written. Scroll up for the error.
 )
