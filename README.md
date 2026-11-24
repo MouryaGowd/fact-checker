@@ -59,3 +59,19 @@ The LLM never picks the verdict label. Each evidence item gets a stance (support
 cd backend && uv run pytest
 cd frontend && npm run build   # type-check
 ```
+
+## Evaluation (50 labelled cases, needs the live app)
+
+`backend/eval/cases.yaml` holds 50 claims across 13 languages (true, false, health myths, and 3 inputs with nothing checkable). Start Ollama and the backend, then:
+
+```bash
+cd backend
+uv run python -m eval.run_eval                        # all 50
+uv run python -m eval.run_eval --limit 5              # quick smoke run
+uv run python -m eval.run_eval --lang hi --lang ta    # some languages
+uv run python -m eval.run_eval --id en-01 --id hi-06  # specific cases
+```
+
+Each case scores `pass`, `abstain` (said unverifiable: unhelpful, not wrong), `fail` (confidently wrong), or `error`. The report breaks accuracy down by language and category and is saved to `backend/eval/results/` (git-ignored). The first full run on a local model takes a long time (roughly a minute or more per case).
+
+Caveats: the non-English claims were translated by an AI and have not been reviewed by native speakers; review them before blaming the model for a failure. `mr-03` is a known language-ID gap (the detector scores a Marathi sentence as Hindi).
