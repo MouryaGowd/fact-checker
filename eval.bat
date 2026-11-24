@@ -58,9 +58,6 @@ if exist "backend\eval\results\latest.md" (
   echo No report was written. Scroll up for the error.
 )
 echo.
-echo To send the report back, run:
-echo   git add backend/eval/results
-echo   git commit -m "Add eval results"
-echo   git push
+echo The report is not tracked by git. Open it, copy everything, and paste it into the chat.
 pause
 exit /b %RC%
