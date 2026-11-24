@@ -46,7 +46,12 @@ async def health():
     installed = set(ollama["models"])
     present = lambda m: m in installed or (":" not in m and f"{m}:latest" in installed)  # noqa: E731
     missing = sorted(m for m in wanted if not present(m)) if ollama["ok"] else sorted(wanted)
-    return {"ok": ollama["ok"] and not missing, "ollama": ollama["ok"], "missing_models": missing}
+    return {
+        "ok": ollama["ok"] and not missing,
+        "ollama": ollama["ok"],
+        "missing_models": missing,
+        "models": {"reasoning_model": s.reasoning_model, "embedding_model": s.embedding_model},
+    }
 
 
 @app.get("/api/languages")

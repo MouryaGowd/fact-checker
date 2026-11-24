@@ -140,6 +140,44 @@ def print_report(summary: dict, rows: list[dict]) -> None:
             print(f"  {r['id']:<8}{r['status']:<7}{what}")
 
 
+def _cell(text: object) -> str:
+    return str(text if text is not None else "").replace("|", "\\|").replace("\n", " ")
+
+
+def render_markdown(summary: dict, rows: list[dict], meta: dict) -> str:
+    """Human-readable report: headline numbers, per-language table, then every non-pass case."""
+    ov = summary["overall"]
+    acc = "n/a" if ov["accuracy"] is None else f"{ov['accuracy']:.0%}"
+    out = [
+        "# Fact-checker eval report", "",
+        f"- Run: {meta['when']}",
+        f"- Models: reasoning `{meta.get('reasoning_model', '?')}`, embedding `{meta.get('embedding_model', '?')}`",
+        f"- Cases: {ov['total']}  |  pass {ov['pass']}  |  abstain {ov['abstain']}  |  "
+        f"**fail {ov['fail']}**  |  error {ov['error']}  |  accuracy (excluding errors) **{acc}**",
+        f"- Language-ID accuracy: {summary['language_id_accuracy']}", "",
+        "`fail` means confidently wrong; `abstain` means it said unverifiable. "
+        "Non-English claims were AI-translated and not reviewed by native speakers.", "",
+    ]  # fmt: skip
+    for title, key in (("By language", "by_language"), ("By category", "by_category")):
+        out += [f"## {title}", "", "| | total | pass | abstain | fail | error | accuracy |", "|---|---|---|---|---|---|---|"]
+        for name, c in summary[key].items():
+            a = "n/a" if c["accuracy"] is None else f"{c['accuracy']:.0%}"
+            out.append(f"| {name} | {c['total']} | {c['pass']} | {c['abstain']} | {c['fail']} | {c['error']} | {a} |")
+        out.append("")
+    out += ["## All cases", "", "| id | status | expected | got | conf | evidence | secs | detail |", "|---|---|---|---|---|---|---|---|"]
+    for r in rows:
+        detail = r["error"] if r["status"] == "error" else r.get("explanation", "")
+        out.append(
+            f"| {r['id']} | {r['status']} | {_cell(','.join(r['expect']))} | {_cell(r.get('outcome'))} | "
+            f"{_cell(r.get('confidence'))} | {_cell(r.get('n_evidence'))} | {r['latency_s']} | {_cell(detail)[:200]} |"
+        )  # fmt: skip
+    bad = [r for r in rows if r["status"] in ("fail", "error")]
+    if bad:
+        out += ["", "## Failures and errors (claim text)", ""]
+        out += [f"- **{r['id']}** ({r['lang']}, {r['status']}): {r['text']}" for r in bad]
+    return "\n".join(out) + "\n"
+
+
 async def main_async(args: argparse.Namespace) -> int:
     cases = load_cases()
     if args.id:
@@ -180,8 +218,15 @@ async def main_async(args: argparse.Namespace) -> int:
 
     RESULTS_DIR.mkdir(exist_ok=True)
     out = Path(args.out) if args.out else RESULTS_DIR / f"eval-{datetime.now():%Y%m%d-%H%M%S}.json"
-    out.write_text(json.dumps({"summary": summary, "rows": rows}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\nWrote {out}")
+    payload = json.dumps({"summary": summary, "rows": rows}, ensure_ascii=False, indent=2)
+    meta = {"when": f"{datetime.now():%Y-%m-%d %H:%M}", **health.get("models", {})}
+    markdown = render_markdown(summary, rows, meta)
+    out.write_text(payload, encoding="utf-8")
+    out.with_suffix(".md").write_text(markdown, encoding="utf-8")
+    # Fixed names so a person (or eval.bat) always knows where the newest report is.
+    (RESULTS_DIR / "latest.json").write_text(payload, encoding="utf-8")
+    (RESULTS_DIR / "latest.md").write_text(markdown, encoding="utf-8")
+    print(f"\nWrote {out} and {out.with_suffix('.md')} (copies: latest.json, latest.md)")
 
     acc = summary["overall"]["accuracy"]
     if args.min_accuracy is not None and (acc is None or acc < args.min_accuracy):

@@ -129,3 +129,25 @@ async def test_run_case_reports_http_errors_as_error_status(live_app_client):
     row = await run_case(live_app_client, {"id": "x3", "lang": "en", "category": "entity", "expect": ["true"], "text": "   "})
     assert row["status"] == "error" and "422" in row["error"]
     json.dumps(row)  # rows must be JSON-serialisable for the report
+
+
+# ---------------- markdown report ----------------
+
+
+def test_render_markdown_has_headline_tables_and_failure_list():
+    from eval.run_eval import render_markdown
+
+    rows = [
+        {"id": "en-01", "lang": "en", "category": "entity", "status": "pass", "expect": ["true"], "outcome": "true",
+         "confidence": 0.9, "n_evidence": 5, "latency_s": 40.1, "explanation": "ok | with pipe", "text": "t1", "lang_ok": True},
+        {"id": "hi-02", "lang": "hi", "category": "entity", "status": "fail", "expect": ["false"], "outcome": "true",
+         "confidence": 0.8, "n_evidence": 3, "latency_s": 52.0, "explanation": "wrong", "text": "भारत की राजधानी मुंबई है।", "lang_ok": True},
+        {"id": "ta-01", "lang": "ta", "category": "entity", "status": "error", "expect": ["true"], "outcome": None,
+         "error": "HTTP 500", "latency_s": 1.0, "text": "t3"},
+    ]
+    md = render_markdown(summarize(rows), rows, {"when": "2026-11-24 10:00", "reasoning_model": "qwen3:14b"})
+    assert "`qwen3:14b`" in md and "**fail 1**" in md and "error 1" in md
+    assert "| hi |" in md and "## Failures and errors" in md
+    assert "भारत की राजधानी मुंबई है।" in md  # failed claim text is shown for review
+    assert "ok \\| with pipe" in md  # pipes must not break the table
+    assert "HTTP 500" in md

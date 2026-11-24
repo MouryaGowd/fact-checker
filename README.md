@@ -72,6 +72,14 @@ uv run python -m eval.run_eval --lang hi --lang ta    # some languages
 uv run python -m eval.run_eval --id en-01 --id hi-06  # specific cases
 ```
 
-Each case scores `pass`, `abstain` (said unverifiable: unhelpful, not wrong), `fail` (confidently wrong), or `error`. The report breaks accuracy down by language and category and is saved to `backend/eval/results/` (git-ignored). The first full run on a local model takes a long time (roughly a minute or more per case).
+Each case scores `pass`, `abstain` (said unverifiable: unhelpful, not wrong), `fail` (confidently wrong), or `error`. The report breaks accuracy down by language and category and is saved to `backend/eval/results/` as timestamped `.json` and `.md` files, plus `latest.json` / `latest.md`. The results are committed on purpose so a run on one machine can be reviewed on another. The first full run on a local model takes a long time (roughly a minute or more per case).
+
+**Windows:** `eval.bat` starts Ollama and the backend if needed, runs the eval, and opens `latest.md`. It passes arguments through (`eval.bat --limit 5`). Afterwards, send the report back with:
+
+```bat
+git add backend/eval/results
+git commit -m "Add eval results"
+git push
+```
 
 Caveats: the non-English claims were translated by an AI and have not been reviewed by native speakers; review them before blaming the model for a failure. `mr-03` is a known language-ID gap (the detector scores a Marathi sentence as Hindi).
